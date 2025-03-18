@@ -1,0 +1,19 @@
+[workspace]
+members = [
+    "cli",
+    "program",
+    "utils",
+]
+resolver = "2"
+
+[profile.dev]
+split-debuginfo = "unpacked"
+
+[workspace.dependencies]
+texture-common = { git = "ssh://git@git.tx-int.net/solana/common.git", rev = "ae9d28a" }
+price-proxy = { git = "ssh://git@git.tx-int.net/solana/superlendy/price-proxy.git", rev = "3ea3719", default-features = false, features = ["no-entrypoint"] }
+price-proxy-client = { git = "ssh://git@git.tx-int.net/solana/superlendy/price-proxy.git", rev = "3ea3719" }
+curvy = { git = "ssh://git@git.tx-int.net/solana/superlendy/curvy.git", rev = "44a9b5a", features = ["no-entrypoint"] }
+curvy-utils = { git = "ssh://git@git.tx-int.net/solana/superlendy/curvy.git", rev = "44a9b5a", package = "curvy-utils" }
+#curvy = { path = "../curvy/program", features = ["no-entrypoint"] }
+#curvy-utils = { path = "../curvy/utils", package = "curvy-utils" }

@@ -1,0 +1,5 @@
+/target/
+/nft
+/local-test/test-ledger
+/local-test/tmp
+.idea
