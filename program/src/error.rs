@@ -129,6 +129,9 @@ pub enum SuperLendyError {
     #[error("error while extracting IXes from Sysvar {0}")]
     SysvarError(ProgramError),
 
+    #[error("metaplex error: {0}")]
+    MetaplexError(ProgramError),
+
     // NaN
     #[error("spl-token error: {0}")]
     SplToken(#[from] RemoteError<TokenError>),
@@ -171,6 +174,7 @@ impl From<SuperLendyError> for ProgramError {
             SuperLendyError::LiquidationTooSmall => Custom(26),
             SuperLendyError::AttemptToLiquidateHealthyPosition(..) => Custom(27),
             SuperLendyError::SysvarError(..) => Custom(28),
+            SuperLendyError::MetaplexError(..) => Custom(29),
 
             SuperLendyError::SplToken(err) => err.into(),
             SuperLendyError::SystemProgram(RemoteError::Unrecognized(err)) => err,

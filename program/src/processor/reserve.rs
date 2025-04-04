@@ -3,11 +3,14 @@ use std::str::FromStr;
 use borsh::BorshDeserialize;
 use bytemuck::Zeroable;
 use curvy::state::curve::Curve;
+use mpl_token_metadata::instructions::{
+    CreateMetadataAccountV3CpiBuilder, UpdateMetadataAccountV2CpiBuilder,
+};
+use mpl_token_metadata::types::DataV2;
 use price_proxy::state::price_feed::{PriceFeed, QuoteSymbol};
 use price_proxy::state::texture_account::PodAccount;
 use solana_program::account_info::AccountInfo;
 use solana_program::clock::Clock;
-use solana_program::msg;
 use solana_program::program_pack::Pack;
 use solana_program::pubkey::Pubkey;
 use solana_program::rent::Rent;
@@ -15,6 +18,7 @@ use solana_program::sysvar::instructions::{
     load_current_index_checked, load_instruction_at_checked,
 };
 use solana_program::sysvar::Sysvar;
+use solana_program::{msg, system_program};
 use spl_associated_token_account::get_associated_token_address_with_program_id;
 use spl_token_2022::extension::{BaseStateWithExtensions, ExtensionType, PodStateWithExtensions};
 use spl_token_2022::pod::PodMint;
@@ -29,11 +33,13 @@ use crate::error::SuperLendyError::OperationCanNotBePerformed;
 use crate::instruction::{
     AlterReserveAccounts, ApplyConfigProposalAccounts, ClaimCuratorPerformanceFeesAccounts,
     ClaimTexturePerformanceFeesAccounts, CreateReserveAccounts, DeleteReserveAccounts,
-    DepositLiquidityAccounts, FlashBorrowAccounts, FlashRepayAccounts, ProposeConfigAccounts,
-    RefreshReserveAccounts, SuperLendyInstruction, WithdrawLiquidityAccounts,
+    DepositLiquidityAccounts, FlashBorrowAccounts, FlashRepayAccounts, LpTokenMetadata,
+    ProposeConfigAccounts, RefreshReserveAccounts, SetLpMetadataAccounts, SuperLendyInstruction,
+    WithdrawLiquidityAccounts,
 };
 use crate::pda::{
-    find_collateral_supply, find_liquidity_supply, find_lp_token_mint, find_program_authority,
+    find_collateral_supply, find_liquidity_supply, find_lp_token_mint, find_metadata,
+    find_program_authority,
 };
 use crate::processor::{
     mint_decimals, seedvec, spl_token_mint, verify_curator, verify_token_program, Processor,
@@ -464,6 +470,11 @@ impl<'a, 'b> Processor<'a, 'b> {
             liquidity_token_program,
         } = DepositLiquidityAccounts::from_iter(&mut self.accounts.iter(), self.program_id)?;
 
+        if amount == 0 {
+            msg!("amount to deposit must be non zero");
+            return Err(SuperLendyError::OperationCanNotBePerformed);
+        }
+
         verify_token_program(liquidity_token_program)?;
 
         if source_liquidity_wallet.key == liquidity_supply.key {
@@ -536,10 +547,16 @@ impl<'a, 'b> Processor<'a, 'b> {
         let lp_amount = unpacked_reserve.deposit_liquidity(amount)?;
         unpacked_reserve.mark_stale();
 
+        if lp_amount == 0 {
+            msg!("deposit is too small and results in zero LP tokens to mint");
+            return Err(SuperLendyError::OperationCanNotBePerformed);
+        }
+
         msg!(
-            "amount {},  mint_decimals {}",
+            "amount {},  mint_decimals {},  lp_amount {}",
             amount,
-            unpacked_reserve.liquidity.mint_decimals
+            unpacked_reserve.liquidity.mint_decimals,
+            lp_amount
         );
         let liquidity_spl_token = SplToken::new(liquidity_token_program);
         liquidity_spl_token
@@ -563,7 +580,7 @@ impl<'a, 'b> Processor<'a, 'b> {
 
     #[inline(never)]
     pub fn withdraw_liquidity(&self, lp_amount: u64) -> LendyResult<()> {
-        msg!("withdraw_liquidity ix");
+        msg!("withdraw_liquidity ix: {}", lp_amount);
 
         let WithdrawLiquidityAccounts {
             authority,
@@ -657,6 +674,13 @@ impl<'a, 'b> Processor<'a, 'b> {
 
             let user_lp_balance = unpacked_lp_user_wallet.amount;
 
+            msg!("full withdraw. user_lp_balance {}.  reserve's max_withdraw_lp_amount {}  utilization_rate {}  max_withdraw_utilization {}",
+                user_lp_balance,
+                max_withdraw_lp_amount,
+                unpacked_reserve.liquidity.utilization_rate()?,
+                unpacked_reserve.config.max_withdraw_utilization_bps
+            );
+
             user_lp_balance.min(max_withdraw_lp_amount)
         } else {
             lp_amount
@@ -676,10 +700,20 @@ impl<'a, 'b> Processor<'a, 'b> {
 
         unpacked_reserve.mark_stale();
 
+        if lp_amount == 0 {
+            msg!("lp_amount to burn is zero");
+            return Err(SuperLendyError::OperationCanNotBePerformed);
+        }
+
         let lp_spl_token = SplToken::new(lp_token_program);
         lp_spl_token
             .burn(source_lp_wallet, lp_mint, authority, lp_amount)?
             .call()?;
+
+        if liquidity_amount == 0 {
+            msg!("liquidity_amount to transfer is zero");
+            return Err(SuperLendyError::OperationCanNotBePerformed);
+        }
 
         let liquidity_spl_token = SplToken::new(liquidity_token_program);
         liquidity_spl_token
@@ -1394,7 +1428,7 @@ impl<'a, 'b> Processor<'a, 'b> {
 
         // New config can change IRM and thus interest accruals. Thus need to accrue interest using
         // old settings and only then apply new settings.
-        if unpacked_reserve.is_stale(&clock)? {
+        if fields.contains(ConfigFields::IRM) && unpacked_reserve.is_stale(&clock)? {
             msg!("update reserve and try again");
             return Err(SuperLendyError::StaleReserve);
         }
@@ -1440,4 +1474,123 @@ impl<'a, 'b> Processor<'a, 'b> {
 
         Ok(())
     }
+
+    #[inline(never)]
+    pub fn set_lp_metadata(&self, data: LpTokenMetadata) -> LendyResult<()> {
+        msg!("set_lp_metadata ix {:?}", data);
+
+        let SetLpMetadataAccounts {
+            reserve,
+            lp_mint,
+            pool,
+            metadata_account,
+            curator_pools_authority,
+            curator,
+            program_authority,
+            mpl_token_metadata_program,
+            system_program,
+            sysvar_rent,
+        } = SetLpMetadataAccounts::from_iter(&mut self.accounts.iter(), self.program_id)?;
+
+        let reserve_data = reserve.data.borrow();
+        let unpacked_reserve = Reserve::try_from_bytes(reserve_data.as_ref())?;
+
+        verify_curator(pool, curator, curator_pools_authority)?;
+
+        verify_key(pool.key, &unpacked_reserve.pool, "pool vs. reserve.pool")?;
+
+        let (expected_metadata_account, _) = find_metadata(lp_mint.key);
+        verify_key(
+            metadata_account.key,
+            &expected_metadata_account,
+            "metadata_account",
+        )?;
+
+        let (_expected_authority /* checked by accounts macro*/, authority_bump) =
+            find_program_authority();
+
+        let metadata = DataV2 {
+            name: data.name,
+            symbol: data.symbol,
+            uri: data.uri,
+            seller_fee_basis_points: 0,
+            creators: None,
+            collection: None,
+            uses: None,
+        };
+
+        if metadata_account.owner == &system_program::ID {
+            msg!("will create new metadata account");
+
+            create_metadata(
+                mpl_token_metadata_program,
+                program_authority,
+                curator_pools_authority,
+                lp_mint,
+                metadata_account,
+                system_program,
+                sysvar_rent,
+                &metadata,
+                &[&[pda::AUTHORITY_SEED, &[authority_bump]]],
+            )?;
+        } else {
+            msg!("will update existing metadata account");
+            update_metadata(
+                mpl_token_metadata_program,
+                program_authority,
+                metadata_account,
+                &metadata,
+                &[&[pda::AUTHORITY_SEED, &[authority_bump]]],
+            )?;
+        }
+
+        Ok(())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn create_metadata<'b>(
+    metadata_program: &AccountInfo<'b>,
+    authority: &AccountInfo<'b>,
+    payer: &AccountInfo<'b>,
+    mint: &AccountInfo<'b>,
+    metadata_acc: &AccountInfo<'b>,
+    system_program: &AccountInfo<'b>,
+    rent: &AccountInfo<'b>,
+    token_metadata: &DataV2,
+    signers_seeds: &[&[&[u8]]],
+) -> LendyResult<()> {
+    let mut cpi_builder = CreateMetadataAccountV3CpiBuilder::new(metadata_program);
+    cpi_builder
+        .metadata(metadata_acc)
+        .mint(mint)
+        .mint_authority(authority)
+        .payer(payer)
+        .update_authority(authority, true)
+        .system_program(system_program)
+        .rent(Some(rent))
+        .is_mutable(true)
+        .data(token_metadata.clone());
+
+    cpi_builder
+        .invoke_signed(signers_seeds)
+        .map_err(SuperLendyError::MetaplexError)
+}
+
+pub fn update_metadata<'b>(
+    metadata_program: &AccountInfo<'b>,
+    authority: &AccountInfo<'b>,
+    metadata_acc: &AccountInfo<'b>,
+    token_metadata: &DataV2,
+    signers_seeds: &[&[&[u8]]],
+) -> LendyResult<()> {
+    let mut cpi_builder = UpdateMetadataAccountV2CpiBuilder::new(metadata_program);
+    cpi_builder
+        .metadata(metadata_acc)
+        .update_authority(authority)
+        .data(token_metadata.clone());
+
+    cpi_builder
+        .invoke_signed(signers_seeds)
+        .map_err(SuperLendyError::MetaplexError)
 }

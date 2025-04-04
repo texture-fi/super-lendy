@@ -57,9 +57,10 @@ pub struct PositionBorrow {
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum PositionHealth {
-    #[serde(rename = "healthy")]
-    Healthy,
+    #[serde(rename = "unhealthy")]
+    Unhealthy(Decimal),
     #[serde(rename = "partly-unhealthy")]
     PartlyUnhealthy,
     #[serde(rename = "fully-unhealthy")]
@@ -86,6 +87,7 @@ pub async fn price_feed_from_reserve(app: &App, reserve_key: &Pubkey) -> (Pubkey
 
 pub async fn position_after_refresh(app: &App, position_key: Pubkey) -> Position {
     let refresh_position_info = app.refresh_position_ix(position_key).await;
+    app.update_prices(&refresh_position_info.1).await;
     app.process_transaction(refresh_position_info.0, &[&app.authority], 5)
         .await
         .expect("Sending TX");
@@ -240,6 +242,7 @@ pub async fn deposit(
     );
 
     let refresh_position_info = app.refresh_position_ix(position_key).await;
+    let mut reserves_to_update_prices = refresh_position_info.1.clone();
     let mut refresh_position_ixs = refresh_position_info.0;
     if !refresh_position_info
         .1
@@ -253,6 +256,7 @@ pub async fn deposit(
         }
         .into_instruction();
         refresh_position_ixs.push(refresh_reserve);
+        reserves_to_update_prices.push(collateral_reserve_key);
     }
     ixs.extend(refresh_position_ixs);
 
@@ -268,6 +272,8 @@ pub async fn deposit(
         .into_instruction(),
         Version { no_error: true }.into_instruction(),
     ]);
+
+    app.update_prices(&reserves_to_update_prices).await;
 
     app.process_transaction(ixs, &[&app.authority], 5)
         .await
@@ -371,6 +377,7 @@ pub async fn borrow(
     );
 
     let refresh_borrow_reserve = app.refresh_reserves_ix(&[borrow_reserve_key]).await;
+    app.update_prices(&[borrow_reserve_key]).await;
     app.process_transaction(refresh_borrow_reserve, &[&app.authority], 5)
         .await
         .expect("Sending TX");
@@ -432,6 +439,8 @@ pub async fn borrow(
     let refresh_position_info = app.refresh_position_ix(position_key).await;
     let mut borrow_ixs = refresh_position_info.0;
     borrow_ixs.push(borrow_ix);
+
+    app.update_prices(&refresh_position_info.1).await;
 
     app.process_transaction(borrow_ixs, &[&app.authority], 5)
         .await
@@ -508,15 +517,21 @@ pub async fn gen_unhealthy_positions(
 
     println!("--------------------- Write Price ---------------------");
 
-    let unhealthy_borrow_value = match position_cfg.health {
-        PositionHealth::PartlyUnhealthy => position.partly_unhealthy_borrow_value().unwrap(),
-        PositionHealth::FullyUnhealthy => position.fully_unhealthy_borrow_value().unwrap(),
-        PositionHealth::Healthy => {
-            println!("Position configured as healthy");
-            return;
+    let unhealthy_ltv = match position_cfg.health {
+        PositionHealth::PartlyUnhealthy => {
+            let partly_unhealthy_borrow_value = position.partly_unhealthy_borrow_value().unwrap();
+            partly_unhealthy_borrow_value
+                .checked_div(deposited_value)
+                .unwrap()
         }
+        PositionHealth::FullyUnhealthy => {
+            let fully_unhealthy_borrow_value = position.fully_unhealthy_borrow_value().unwrap();
+            fully_unhealthy_borrow_value
+                .checked_div(deposited_value)
+                .unwrap()
+        }
+        PositionHealth::Unhealthy(value) => value,
     };
-    let unhealthy_ltv = unhealthy_borrow_value.checked_div(deposited_value).unwrap();
 
     for deposit in &position_cfg.deposits {
         let (price_feed_key, price_feed) = price_feed_from_reserve(app, &deposit.reserve).await;

@@ -2647,6 +2647,118 @@ impl Version {
         )
     }
 }
+///[SuperLendyInstruction::SetLpMetadata] Builder struct
+pub struct SetLpMetadata {
+    #[cfg(feature = "program-id-manually")]
+    /// Current program ID
+    pub program_id: solana_program::pubkey::Pubkey,
+    ///Reserve to set LP metadata for
+    pub reserve: solana_program::pubkey::Pubkey,
+    ///Pool - parent for Reserve
+    pub pool: solana_program::pubkey::Pubkey,
+    ///Metadata account. PDA.
+    pub metadata_account: solana_program::pubkey::Pubkey,
+    ///Authority who can configure reserves.
+    pub curator_pools_authority: solana_program::pubkey::Pubkey,
+    ///Curator account.
+    pub curator: solana_program::pubkey::Pubkey,
+    ///Sysvar rent account
+    pub sysvar_rent: solana_program::pubkey::Pubkey,
+    pub metadata: LpTokenMetadata,
+}
+impl SetLpMetadata {
+    #[track_caller]
+    pub fn into_instruction(self) -> solana_program::instruction::Instruction {
+        let Self {
+            #[cfg(feature = "program-id-manually")]
+            program_id,
+            reserve,
+            pool,
+            metadata_account,
+            curator_pools_authority,
+            curator,
+            sysvar_rent,
+            metadata,
+        } = self;
+        #[cfg(not(feature = "program-id-manually"))]
+        let program_id = SUPER_LENDY_ID;
+        let (lp_mint, _) = solana_program::pubkey::Pubkey::find_program_address(
+            &[
+                #[allow(clippy::useless_asref)]
+                reserve.as_ref(),
+                #[allow(clippy::useless_asref)]
+                crate::pda::LP_TOKEN_SEED.as_ref(),
+            ],
+            &program_id,
+        );
+        let (program_authority, _) = solana_program::pubkey::Pubkey::find_program_address(
+            &[#[allow(clippy::useless_asref)] crate::pda::AUTHORITY_SEED.as_ref()],
+            &program_id,
+        );
+        #[allow(unused_mut)]
+        let mut accounts = vec![];
+        accounts
+            .extend([
+                solana_program::instruction::AccountMeta::new_readonly(reserve, false),
+            ]);
+        accounts.extend([solana_program::instruction::AccountMeta::new(lp_mint, false)]);
+        accounts
+            .extend([
+                solana_program::instruction::AccountMeta::new_readonly(pool, false),
+            ]);
+        accounts
+            .extend([
+                solana_program::instruction::AccountMeta::new(metadata_account, false),
+            ]);
+        accounts
+            .extend([
+                solana_program::instruction::AccountMeta::new(
+                    curator_pools_authority,
+                    true,
+                ),
+            ]);
+        accounts
+            .extend([
+                solana_program::instruction::AccountMeta::new_readonly(curator, false),
+            ]);
+        accounts
+            .extend([
+                solana_program::instruction::AccountMeta::new_readonly(
+                    program_authority,
+                    false,
+                ),
+            ]);
+        accounts
+            .extend([
+                solana_program::instruction::AccountMeta::new_readonly(
+                    mpl_token_metadata::ID,
+                    false,
+                ),
+            ]);
+        accounts
+            .extend([
+                solana_program::instruction::AccountMeta::new_readonly(
+                    solana_program::system_program::ID,
+                    false,
+                ),
+            ]);
+        accounts
+            .extend([
+                solana_program::instruction::AccountMeta::new_readonly(
+                    sysvar_rent,
+                    false,
+                ),
+            ]);
+        let ix = SuperLendyInstruction::SetLpMetadata {
+            metadata,
+        };
+        solana_program::instruction::Instruction::new_with_borsh(
+            program_id,
+            &ix,
+            accounts,
+        )
+    }
+}
 /// [SuperLendyInstruction::CreateTextureConfig] instruction account indexes helper
 #[derive(Debug, PartialEq)]
 pub struct CreateTextureConfigAccountIndexes {
@@ -5428,6 +5540,120 @@ impl<const N: usize> TryFrom<[u8; N]> for VersionAccountIndexes {
     }
 }
 impl TryFrom<Vec<u8>> for VersionAccountIndexes {
+    type Error = usize;
+    fn try_from(indexes: Vec<u8>) -> Result<Self, Self::Error> {
+        Self::try_from_indexes(&indexes)
+    }
+}
+/// [SuperLendyInstruction::SetLpMetadata] instruction account indexes helper
+#[derive(Debug, PartialEq)]
+pub struct SetLpMetadataAccountIndexes {
+    pub reserve: usize,
+    pub lp_mint: usize,
+    pub pool: usize,
+    pub metadata_account: usize,
+    pub curator_pools_authority: usize,
+    pub curator: usize,
+    pub program_authority: usize,
+    pub mpl_token_metadata_program: usize,
+    pub system_program: usize,
+    pub sysvar_rent: usize,
+}
+impl SetLpMetadataAccountIndexes {
+    pub const COUNT: usize = 10usize;
+    pub const RESERVE: usize = 0usize;
+    pub const LP_MINT: usize = 1usize;
+    pub const POOL: usize = 2usize;
+    pub const METADATA_ACCOUNT: usize = 3usize;
+    pub const CURATOR_POOLS_AUTHORITY: usize = 4usize;
+    pub const CURATOR: usize = 5usize;
+    pub const PROGRAM_AUTHORITY: usize = 6usize;
+    pub const MPL_TOKEN_METADATA_PROGRAM: usize = 7usize;
+    pub const SYSTEM_PROGRAM: usize = 8usize;
+    pub const SYSVAR_RENT: usize = 9usize;
+    pub fn new_direct_order() -> Self {
+        let mut iter = std::iter::repeat(()).enumerate().map(|(idx, ())| idx);
+        Self {
+            reserve: iter.next().unwrap(),
+            lp_mint: iter.next().unwrap(),
+            pool: iter.next().unwrap(),
+            metadata_account: iter.next().unwrap(),
+            curator_pools_authority: iter.next().unwrap(),
+            curator: iter.next().unwrap(),
+            program_authority: iter.next().unwrap(),
+            mpl_token_metadata_program: iter.next().unwrap(),
+            system_program: iter.next().unwrap(),
+            sysvar_rent: iter.next().unwrap(),
+        }
+    }
+    pub fn try_from_indexes<'a>(
+        indexes: impl IntoIterator<Item = &'a u8>,
+    ) -> Result<Self, usize> {
+        let mut iter = indexes.into_iter().map(|idx| (*idx) as usize);
+        let mut idx = 0_usize;
+        Ok(Self {
+            reserve: {
+                idx += 1;
+                iter.next().ok_or(idx - 1)?
+            },
+            lp_mint: {
+                idx += 1;
+                iter.next().ok_or(idx - 1)?
+            },
+            pool: {
+                idx += 1;
+                iter.next().ok_or(idx - 1)?
+            },
+            metadata_account: {
+                idx += 1;
+                iter.next().ok_or(idx - 1)?
+            },
+            curator_pools_authority: {
+                idx += 1;
+                iter.next().ok_or(idx - 1)?
+            },
+            curator: {
+                idx += 1;
+                iter.next().ok_or(idx - 1)?
+            },
+            program_authority: {
+                idx += 1;
+                iter.next().ok_or(idx - 1)?
+            },
+            mpl_token_metadata_program: {
+                idx += 1;
+                iter.next().ok_or(idx - 1)?
+            },
+            system_program: {
+                idx += 1;
+                iter.next().ok_or(idx - 1)?
+            },
+            sysvar_rent: {
+                idx += 1;
+                iter.next().ok_or(idx - 1)?
+            },
+        })
+    }
+}
+impl<'a> TryFrom<&'a [u8]> for SetLpMetadataAccountIndexes {
+    type Error = usize;
+    fn try_from(indexes: &'a [u8]) -> Result<Self, Self::Error> {
+        Self::try_from_indexes(indexes)
+    }
+}
+impl<'a, const N: usize> TryFrom<&'a [u8; N]> for SetLpMetadataAccountIndexes {
+    type Error = usize;
+    fn try_from(indexes: &'a [u8; N]) -> Result<Self, Self::Error> {
+        Self::try_from_indexes(indexes)
+    }
+}
+impl<const N: usize> TryFrom<[u8; N]> for SetLpMetadataAccountIndexes {
+    type Error = usize;
+    fn try_from(indexes: [u8; N]) -> Result<Self, Self::Error> {
+        Self::try_from_indexes(&indexes)
+    }
+}
+impl TryFrom<Vec<u8>> for SetLpMetadataAccountIndexes {
     type Error = usize;
     fn try_from(indexes: Vec<u8>) -> Result<Self, Self::Error> {
         Self::try_from_indexes(&indexes)
@@ -8420,6 +8646,132 @@ impl<'a, 'i> VersionAccounts<'a, 'i> {
         Ok(Self { system_program })
     }
 }
+///[SuperLendyInstruction::SetLpMetadata] instruction account infos helper
+#[derive(Debug)]
+pub struct SetLpMetadataAccounts<'a, 'i> {
+    ///Reserve to set LP metadata for
+    pub reserve: &'a solana_program::account_info::AccountInfo<'i>,
+    ///LP tokens mint. PDA.
+    pub lp_mint: &'a solana_program::account_info::AccountInfo<'i>,
+    ///Pool - parent for Reserve
+    pub pool: &'a solana_program::account_info::AccountInfo<'i>,
+    ///Metadata account. PDA.
+    pub metadata_account: &'a solana_program::account_info::AccountInfo<'i>,
+    ///Authority who can configure reserves.
+    pub curator_pools_authority: &'a solana_program::account_info::AccountInfo<'i>,
+    ///Curator account.
+    pub curator: &'a solana_program::account_info::AccountInfo<'i>,
+    ///Contract's authority. PDA.
+    pub program_authority: &'a solana_program::account_info::AccountInfo<'i>,
+    ///Metaplex token metadata Program.
+    pub mpl_token_metadata_program: &'a solana_program::account_info::AccountInfo<'i>,
+    ///System Program.
+    pub system_program: &'a solana_program::account_info::AccountInfo<'i>,
+    ///Sysvar rent account
+    pub sysvar_rent: &'a solana_program::account_info::AccountInfo<'i>,
+}
+impl<'a, 'i> SetLpMetadataAccounts<'a, 'i> {
+    pub fn from_iter<I>(
+        iter: &mut I,
+        program_id: &solana_program::pubkey::Pubkey,
+    ) -> std::result::Result<Self, texture_common::macros::accounts::AccountParseError>
+    where
+        I: Iterator<Item = &'a solana_program::account_info::AccountInfo<'i>>,
+    {
+        let __self_program_id__ = program_id;
+        let reserve = texture_common::utils::next_account_info(iter)?;
+        let lp_mint = texture_common::utils::next_account_info(iter)?;
+        let pool = texture_common::utils::next_account_info(iter)?;
+        let metadata_account = texture_common::utils::next_account_info(iter)?;
+        let curator_pools_authority = texture_common::utils::next_account_info(iter)?;
+        let curator = texture_common::utils::next_account_info(iter)?;
+        let program_authority = texture_common::utils::next_account_info(iter)?;
+        let mpl_token_metadata_program = texture_common::utils::next_account_info(iter)?;
+        let system_program = texture_common::utils::next_account_info(iter)?;
+        let sysvar_rent = texture_common::utils::next_account_info(iter)?;
+        #[cfg(not(feature = "program-id-manually"))] #[allow(clippy::needless_borrow)]
+        texture_common::utils::verify_key(
+            __self_program_id__,
+            &SUPER_LENDY_ID,
+            "self_program_id",
+        )?;
+        let rent = <solana_program::rent::Rent as solana_program::sysvar::Sysvar>::get()
+            .expect("rent");
+        #[allow(clippy::needless_borrow)]
+        texture_common::utils::verify_key(
+            reserve.owner,
+            &__self_program_id__,
+            concat!(stringify!(reserve), " owner"),
+        )?;
+        if !lp_mint.is_writable {
+            solana_program::msg!(concat!(stringify!(lp_mint), " is not writable"));
+            return Err(texture_common::error::InvalidAccount(*lp_mint.key).into());
+        }
+        #[allow(clippy::needless_borrow)]
+        texture_common::utils::verify_key(
+            pool.owner,
+            &__self_program_id__,
+            concat!(stringify!(pool), " owner"),
+        )?;
+        if !metadata_account.is_writable {
+            solana_program::msg!(
+                concat!(stringify!(metadata_account), " is not writable")
+            );
+            return Err(
+                texture_common::error::InvalidAccount(*metadata_account.key).into(),
+            );
+        }
+        if !curator_pools_authority.is_writable {
+            solana_program::msg!(
+                concat!(stringify!(curator_pools_authority), " is not writable")
+            );
+            return Err(
+                texture_common::error::InvalidAccount(*curator_pools_authority.key)
+                    .into(),
+            );
+        }
+        if !curator_pools_authority.is_signer {
+            return Err(
+                texture_common::error::MissingSignature(*curator_pools_authority.key)
+                    .into(),
+            );
+        }
+        #[allow(clippy::needless_borrow)]
+        texture_common::utils::verify_key(
+            curator.owner,
+            &__self_program_id__,
+            concat!(stringify!(curator), " owner"),
+        )?;
+        if !rent.is_exempt(curator.lamports(), curator.data_len()) {
+            solana_program::msg!(concat!(stringify!(curator), " is not rent exempt"));
+            return Err(texture_common::error::InvalidAccount(*curator.key).into());
+        }
+        #[allow(clippy::needless_borrow)]
+        texture_common::utils::verify_key(
+            mpl_token_metadata_program.key,
+            &mpl_token_metadata::ID,
+            stringify!(mpl_token_metadata_program),
+        )?;
+        #[allow(clippy::needless_borrow)]
+        texture_common::utils::verify_key(
+            system_program.key,
+            &solana_program::system_program::ID,
+            stringify!(system_program),
+        )?;
+        Ok(Self {
+            reserve,
+            lp_mint,
+            pool,
+            metadata_account,
+            curator_pools_authority,
+            curator,
+            program_authority,
+            mpl_token_metadata_program,
+            system_program,
+            sysvar_rent,
+        })
+    }
+}
 pub(crate) mod ix_docs {
     macro_rules! create_texture_config {
         () => {
@@ -9216,4 +9568,32 @@ pub(crate) mod ix_docs {
         };
     }
     pub(crate) use version;
+    macro_rules! set_lp_metadata {
+        () => {
+            concat! { " ## Accounts", "\n", " ", "\n", "<b><i>", "0", "</i></b>. <b>",
+            "\\[\\]", "</b> ", "Reserve to set LP metadata for", "\n", " ", "\n",
+            "<b><i>", "1", "</i></b>. <b>", "\\[writable\\]", "</b> ",
+            "LP tokens mint. PDA.", "\n", " ", "\n", "<b><i>", "2", "</i></b>. <b>",
+            "\\[\\]", "</b> ", "Pool - parent for Reserve", "\n", " ", "\n", "<b><i>",
+            "3", "</i></b>. <b>", "\\[writable\\]", "</b> ", "Metadata account. PDA.",
+            "\n", " ", "\n", "<b><i>", "4", "</i></b>. <b>", "\\[writable, signer\\]",
+            "</b> ", "Authority who can configure reserves.", "\n", " ", "\n", "<b><i>",
+            "5", "</i></b>. <b>", "\\[\\]", "</b> ", "Curator account.", "\n", " ", "\n",
+            "<b><i>", "6", "</i></b>. <b>", "\\[\\]", "</b> ",
+            "Contract's authority. PDA.", "\n", " ", "\n", "<b><i>", "7",
+            "</i></b>. <b>", "\\[\\]", "</b> ", "Metaplex token metadata Program.", "\n",
+            " ", "\n", "<b><i>", "8", "</i></b>. <b>", "\\[\\]", "</b> ",
+            "System Program.", "\n", " ", "\n", "<b><i>", "9", "</i></b>. <b>", "\\[\\]",
+            "</b> ", "Sysvar rent account", "\n", "\n", " ## Usage", "\n", " ",
+            "For create instruction use builder struct [SetLpMetadata]", " ",
+            "(method [into_instruction][SetLpMetadata::into_instruction]).", " ", "\n\n",
+            " ",
+            "For parse accounts infos from processor use struct [SetLpMetadataAccounts]",
+            " ", "(method [from_iter][SetLpMetadataAccounts::from_iter]).", " ", "\n\n",
+            " ",
+            "For work with account indexes use struct [SetLpMetadataAccountIndexes].",
+            "\n", }
+        };
+    }
+    pub(crate) use set_lp_metadata;
 }

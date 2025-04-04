@@ -64,9 +64,10 @@ pub const RESERVE_TYPE_PROTECTED_COLLATERAL: u8 = 1;
 /// This means that one could:
 /// 1. Deposit liquidity and get LP tokens
 /// 2. Borrow from this Reserve thus making yield for depositors
+///
 /// But one can NOT:
 /// 1. Lock LP tokens as collateral in this Reserve. Thus deposits in such reserve will not serve as
-/// collateral.
+///    collateral.
 pub const RESERVE_TYPE_NOT_A_COLLATERAL: u8 = 2;
 
 // RESERVE MODES. Can be set during `AlterReserve` ix.
@@ -81,6 +82,7 @@ pub const RESERVE_MODE_NORMAL: u8 = 0;
 /// 2. Lock/Unlock LP tokens as collateral in this Reserve.
 /// 3. Withdraw from this Reserve.
 /// 4. Unlock LP tokens in this Reserve.
+///
 /// But one can NOT:
 /// 1. Borrow from this Reserve.
 pub const RESERVE_MODE_BORROW_DISABLED: u8 = 1;
@@ -91,6 +93,7 @@ pub const RESERVE_MODE_BORROW_DISABLED: u8 = 1;
 /// This means that one could:
 /// 1. Deposit liquidity and get LP tokens.
 /// 2. Lock LP tokens as collateral in this Reserve.
+///
 /// But one can NOT:
 /// 1. Borrow from this Reserve.
 /// 2. Withdraw from this Reserve.
@@ -428,9 +431,9 @@ impl Reserve {
     /// Liquidate some or all of an unhealthy position
     /// There are two liquidation levels:
     /// 1. When reserve.config.partly_unhealthy_ltv >= positions.LTV > reserve.config.fully_unhealthy_ltv - in this case we
-    /// allow maximum reserve.config.partial_liquidation_factor_bps of the collateral to be liquidated.
+    ///    allow maximum reserve.config.partial_liquidation_factor_bps of the collateral to be liquidated.
     /// 2. When reserve.config.fully_unhealthy_ltv <= positions.LTV - liquidator can liquidate as much of the position
-    /// as he wants (may do full liquidation at once).
+    ///    as he wants (may do full liquidation at once).
     pub fn calculate_liquidation(
         &self,
         amount_to_liquidate: u64,

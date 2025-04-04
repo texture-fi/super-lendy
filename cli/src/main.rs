@@ -700,6 +700,28 @@ enum Command {
         #[structopt(long)]
         curator: Pubkey,
     },
+    /// The command creates/updates metadata for LP token in Solana and generates json metadata file.
+    /// Call it with Curator Pools Authority
+    SetLpMetadata {
+        /// Reserve address to set LP metadata for
+        #[structopt(long)]
+        reserve: Pubkey,
+        /// Name of the LP token (will be shown in wallets)
+        #[structopt(long)]
+        name: String,
+        /// Short symbol of LP token (may be used by trading platforms)
+        #[structopt(long)]
+        symbol: String,
+        /// URI of the metadata json file. Defaults to https://texture.finance/cimg/tokens/{}.svg
+        #[structopt(long)]
+        uri: Option<String>,
+    },
+    /// Shows LP metadata for all SuperLendy LP tokens. Output may be narrowed down to one `reserve`
+    LpMetadata {
+        /// Reserve address to view LP metadata
+        #[structopt(long)]
+        reserve: Option<Pubkey>,
+    },
 }
 
 #[tokio::main]
@@ -1057,7 +1079,7 @@ async fn main() {
             app.clear_proposed_config_change(reserve, index).await;
         }
         Command::ApplyConfigProposal { reserve, index } => {
-            app.apply_proposed_config_change(reserve, index).await;
+            app.apply_config_proposal(reserve, index).await;
         }
         Command::DeleteReserve { reserve } => {
             app.delete_reserve(reserve).await;
@@ -1222,6 +1244,17 @@ async fn main() {
         }
         Command::MakeFeesAta { curator } => {
             app.make_fees_ata(&curator).await;
+        }
+        Command::SetLpMetadata {
+            reserve,
+            name,
+            symbol,
+            uri,
+        } => {
+            app.set_lp_metadata(reserve, name, symbol, uri).await;
+        }
+        Command::LpMetadata { reserve } => {
+            app.show_lp_metadata(reserve).await;
         }
     }
 }

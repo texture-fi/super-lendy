@@ -139,6 +139,7 @@ impl<'a, 'b> Processor<'a, 'b> {
                 self.apply_config_proposal(index)
             }
             SuperLendyInstruction::Version { no_error } => self.version(no_error),
+            SuperLendyInstruction::SetLpMetadata { metadata } => self.set_lp_metadata(metadata),
             _ => {
                 msg!("Unrecognized IX");
                 Err(SuperLendyError::Unimplemented)

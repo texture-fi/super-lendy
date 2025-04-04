@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
+use std::fs::File;
+use std::io::Write;
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
@@ -8,12 +11,14 @@ use async_recursion::async_recursion;
 use bytemuck::Zeroable;
 use derive_more::Display;
 use hex::ToHex;
+use mpl_token_metadata::{MAX_NAME_LENGTH, MAX_SYMBOL_LENGTH, MAX_URI_LENGTH};
 use price_proxy::state::price_feed::{
     FeedType, PriceFeed, PriceFeedSource, WormholeVerificationLevel,
 };
 use price_proxy::state::utils::str_to_array;
 use price_proxy_client::PriceProxyClient;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use serde_with::serde_as;
 use serde_with::DisplayFromStr;
 use solana_account_decoder::UiAccountData;
@@ -50,13 +55,13 @@ use super_lendy::instruction::{
     ClaimCuratorPerformanceFees, ClaimReward, ClaimTexturePerformanceFees, ClosePosition,
     CreateCurator, CreatePool, CreatePosition, CreateReserve, CreateTextureConfig, DeleteReserve,
     DepositLiquidity, FlashBorrow, FlashRepay, InitRewardSupply, Liquidate, LockCollateral,
-    ProposeConfig, RefreshPosition, RefreshReserve, Repay, SetRewardRules,
-    TransferTextureConfigOwnership, UnlockCollateral, Version, WithdrawLiquidity, WithdrawReward,
-    WriteOffBadDebt,
+    LpTokenMetadata, ProposeConfig, RefreshPosition, RefreshReserve, Repay, SetLpMetadata,
+    SetRewardRules, TransferTextureConfigOwnership, UnlockCollateral, Version, WithdrawLiquidity,
+    WithdrawReward, WriteOffBadDebt,
 };
 use super_lendy::pda::{
-    find_collateral_supply, find_liquidity_supply, find_lp_token_mint, find_program_authority,
-    find_reward_supply, find_rewards_program_authority,
+    find_collateral_supply, find_liquidity_supply, find_lp_token_mint, find_metadata,
+    find_program_authority, find_reward_supply, find_rewards_program_authority,
 };
 use super_lendy::state::curator::{
     Curator, CuratorParams, CURATOR_LOGO_URL_MAX_LEN, CURATOR_NAME_MAX_LEN,
@@ -233,6 +238,7 @@ impl App {
     /// 3. program_authority - PDA used in many IXes
     /// 4. Token Program
     /// 5. Token2022 Program
+    ///
     /// All reserves, mentioned in the Pool become source of accounts for the LUT.
     /// For each Reserve we put in to LUT:
     /// 1. Reserve address
@@ -240,6 +246,7 @@ impl App {
     /// 3. Reserve's LP mint
     /// 4. Reserve's liquidity supply
     /// 5. Reserve's collateral supply
+    ///
     /// Roughly one LUT can hold info for 50 Reserves - more that enough.
     /// `current_lut_config` - current LUT config.
     pub async fn create_or_update_luts(
@@ -1632,7 +1639,7 @@ impl App {
         println!("Proposal cleared");
     }
 
-    pub async fn apply_proposed_config_change(&self, reserve_key: Pubkey, index: u8) {
+    pub async fn apply_config_proposal(&self, reserve_key: Pubkey, index: u8) {
         let reserve_data = self
             .rpc
             .get_account_data(&reserve_key)
@@ -1657,7 +1664,9 @@ impl App {
             reserve.config.market_price_feed
         };
 
-        let ix = ApplyConfigProposal {
+        let mut ixs = Vec::new();
+
+        let apply_proposal_ix = ApplyConfigProposal {
             reserve: reserve_key,
             pool: reserve.pool,
             market_price_feed,
@@ -1674,9 +1683,15 @@ impl App {
         }
         .into_instruction();
 
-        self.update_prices(&[reserve_key]).await;
+        if fields.contains(ConfigFields::IRM) {
+            // Only refresh reserve when changing IRM.
+            self.update_prices(&[reserve_key]).await;
+            ixs.push(refresh);
+        }
 
-        self.send_transaction_by(vec![refresh, ix], &[&self.authority])
+        ixs.push(apply_proposal_ix);
+
+        self.send_transaction_by(ixs, &[&self.authority])
             .await
             .expect("Sending TX");
 
@@ -3271,6 +3286,147 @@ impl App {
         println!("Bad debt written off");
     }
 
+    pub async fn set_lp_metadata(
+        &self,
+        reserve_key: Pubkey,
+        name: String,
+        symbol: String,
+        uri: Option<String>,
+    ) {
+        if name.len() > MAX_NAME_LENGTH {
+            println!("name length must not exceed {}", MAX_NAME_LENGTH);
+            return;
+        }
+
+        if symbol.len() > MAX_SYMBOL_LENGTH {
+            println!("symbol length must not exceed {}", MAX_SYMBOL_LENGTH);
+            return;
+        }
+
+        if let Some(uri) = uri.clone() {
+            if uri.len() > MAX_URI_LENGTH {
+                println!("uri length must not exceed {}", MAX_URI_LENGTH);
+                return;
+            }
+        }
+
+        let reserve_data = self
+            .rpc
+            .get_account_data(&reserve_key)
+            .await
+            .expect("getting Reserve account");
+        let reserve = Reserve::try_from_bytes(&reserve_data).expect("unpacking Reserve");
+
+        let pool_data = self
+            .rpc
+            .get_account_data(&reserve.pool)
+            .await
+            .expect("getting Pool account");
+        let pool = Pool::try_from_bytes(&pool_data).expect("unpacking Pool");
+
+        let lp_mint = find_lp_token_mint(&reserve_key).0;
+        let metadata_account = find_metadata(&lp_mint).0;
+
+        let metadata_url = uri.unwrap_or(format!(
+            "https://texture.finance/cimg/tokens/{}_metadata.json",
+            lp_mint
+        ));
+
+        let ix = SetLpMetadata {
+            reserve: reserve_key,
+            pool: reserve.pool,
+            metadata_account,
+            curator_pools_authority: self.authority.pubkey(),
+            curator: pool.curator,
+            sysvar_rent: solana_program::sysvar::rent::id(),
+            metadata: LpTokenMetadata {
+                name: name.clone(),
+                symbol: symbol.clone(),
+                uri: metadata_url,
+            },
+        }
+        .into_instruction();
+
+        self.send_transaction_by(vec![ix], &[&self.authority])
+            .await
+            .expect("Sending TX");
+
+        println!("Metadata set");
+
+        let metadata_file_name = format!("{}_metadata.json", lp_mint);
+        let image_url = format!("https://texture.finance/cimg/tokens/{}.svg", lp_mint);
+        save_metadata(&metadata_file_name, &name, &symbol, "", &image_url).ok();
+    }
+
+    pub async fn show_lp_metadata(&self, exact_reserve_key: Option<Pubkey>) {
+        let reserves = load_reserves(&self.rpc).await.expect("loading reserves");
+
+        for (reserve_key, reserve) in reserves.iter() {
+            if let Some(exact_reserve_key) = exact_reserve_key {
+                if reserve_key != &exact_reserve_key {
+                    continue;
+                }
+            }
+
+            let lp_mint = find_lp_token_mint(reserve_key).0;
+            let metadata_account = find_metadata(&lp_mint).0;
+
+            if !self
+                .account_exists(&metadata_account)
+                .await
+                .expect("account existance check")
+            {
+                if reserve.reserve_type == RESERVE_TYPE_NOT_A_COLLATERAL {
+                    println!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                    println!(
+                        "BORROW ONLY reserve {} with LP mint {} does NOT have LP metadata set",
+                        reserve_key, lp_mint
+                    );
+                    println!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                }
+            } else {
+                let data = self
+                    .rpc
+                    .get_account_data(&metadata_account)
+                    .await
+                    .expect("getting metadata account");
+
+                match mpl_token_metadata::accounts::Metadata::from_bytes(&data) {
+                    Ok(metadata) => {
+                        println!(
+                            "=============== Metadata for LP {} from {} reserve =============",
+                            lp_mint, reserve_key
+                        );
+                        println!("Solana name: {}", metadata.name);
+                        println!("Solana symbol: {}", metadata.symbol);
+                        println!("Solana URI: {}", metadata.uri);
+
+                        if !metadata.uri.is_empty() {
+                            let response = reqwest::get(metadata.uri)
+                                .await
+                                .expect("request off chain metadata");
+
+                            if response.status().is_success() {
+                                let off_chain_metadata: Value =
+                                    response.json().await.expect("metadata to json");
+                                println!(
+                                    "Metadata obtained from URI:\n{}",
+                                    serde_json::to_string_pretty(&off_chain_metadata)
+                                        .expect("to string pretty")
+                                );
+                            } else {
+                                println!("Error getting off-chain metadata: {}", response.status());
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        println!("error deserializing metadata {}: {}", metadata_account, err);
+                    }
+                }
+            }
+        }
+    }
+
     #[async_recursion]
     pub async fn update_prices(&self, reserves: &[Pubkey]) {
         let client = PriceProxyClient {
@@ -3319,9 +3475,10 @@ impl App {
 
                         let write_encoded_vaa =
                             client.write_encoded_vaa_ix(message, encoded_vaa).await;
-                        self.send_transaction_by(
+                        self.process_transaction(
                             write_encoded_vaa,
                             &[&self.authority, &encoded_vaa_keypair],
+                            5,
                         )
                         .await
                         .expect("Sending TX");
@@ -3335,9 +3492,13 @@ impl App {
                             .await
                     }
                 };
-                self.send_transaction_by(price_update, &[&self.authority, &price_update_keypair])
-                    .await
-                    .expect("Sending TX");
+                self.process_transaction(
+                    price_update,
+                    &[&self.authority, &price_update_keypair],
+                    5,
+                )
+                .await
+                .expect("Sending TX");
 
                 Some(price_update_key)
             } else {
@@ -3374,9 +3535,10 @@ impl App {
 
                             let write_encoded_vaa =
                                 client.write_encoded_vaa_ix(message, encoded_vaa).await;
-                            self.send_transaction_by(
+                            self.process_transaction(
                                 write_encoded_vaa,
                                 &[&self.authority, &encoded_vaa_keypair],
+                                5,
                             )
                             .await
                             .expect("Sending TX");
@@ -3390,9 +3552,10 @@ impl App {
                                 .await
                         }
                     };
-                    self.send_transaction_by(
+                    self.process_transaction(
                         price_update,
                         &[&self.authority, &price_update_keypair],
+                        5,
                     )
                     .await
                     .expect("Sending TX");
@@ -3407,14 +3570,14 @@ impl App {
                         )
                         .await;
 
-                    self.send_transaction_by(update_price, &[&self.authority])
+                    self.process_transaction(update_price, &[&self.authority], 5)
                         .await
                         .expect("Sending TX");
                     println!("Updated price for feed: {}", price_feed_key);
 
                     // 3. Close a price update account, recovering the rent.
                     let close_price_update = client.close_price_update_ix(price_update_key).await;
-                    self.send_transaction_by(close_price_update, &[&self.authority])
+                    self.process_transaction(close_price_update, &[&self.authority], 5)
                         .await
                         .expect("Sending TX");
                     println!(
@@ -3443,7 +3606,7 @@ impl App {
                         )
                         .await;
 
-                    self.send_transaction_by(update_price_ixs, &[&self.authority])
+                    self.process_transaction(update_price_ixs, &[&self.authority], 5)
                         .await
                         .expect("Sending TX");
                     println!("Updated price for feed: {}", price_feed_key);
@@ -3469,7 +3632,7 @@ impl App {
 
                     ixs.extend(update_price_ixs);
 
-                    self.send_transaction_by(ixs, &[&self.authority])
+                    self.process_transaction(ixs, &[&self.authority], 5)
                         .await
                         .expect("Sending TX");
                     println!("Updated price for feed: {}", price_feed_key);
@@ -3482,7 +3645,7 @@ impl App {
             if let Some(transform_price_update) = transform_price_update {
                 // Close a price update account, recovering the rent.
                 let close_price_update = client.close_price_update_ix(transform_price_update).await;
-                self.send_transaction_by(close_price_update, &[&self.authority])
+                self.process_transaction(close_price_update, &[&self.authority], 5)
                     .await
                     .expect("Sending TX");
                 println!(
@@ -3743,4 +3906,28 @@ pub fn read_lut_config(path: &str) -> Result<Vec<LutCfgEntry>> {
     let text = std::fs::read_to_string(path).expect("Can't read LUT config provided");
     let config: Vec<LutCfgEntry> = serde_json::from_str(&text)?;
     Ok(config)
+}
+
+fn save_metadata(
+    file_path: &str,
+    name: &str,
+    symbol: &str,
+    description: &str,
+    image_url: &str,
+) -> std::io::Result<()> {
+    let metadata: Value = json!({
+        "name": name,
+        "symbol": symbol,
+        "description": description,
+        "image": image_url
+    });
+
+    let json_string = serde_json::to_string_pretty(&metadata)?;
+
+    let path = Path::new(file_path);
+    let mut file = File::create(path)?;
+    file.write_all(json_string.as_bytes())?;
+
+    println!("Metadata in JSON format written to: {}", file_path);
+    Ok(())
 }

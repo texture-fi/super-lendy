@@ -383,6 +383,12 @@ impl<'a, 'b> Processor<'a, 'b> {
             )
             .map_err(|err| SuperLendyError::AccountUnpackError(*source_lp_wallet.key, err))?;
 
+            msg!(
+                "full lock. source wallet {} balance {}",
+                source_lp_wallet.key,
+                unpacked_source_lp_wallet.amount
+            );
+
             unpacked_source_lp_wallet.amount
         } else {
             amount
@@ -498,6 +504,10 @@ impl<'a, 'b> Processor<'a, 'b> {
         }
 
         let withdraw_amount = if !position.have_any_borrowings() {
+            msg!(
+                "position doesn't have borrowings. deposited_amount {}",
+                collateral.deposited_amount
+            );
             collateral.deposited_amount.min(amount)
         } else {
             // Determine how much collateral (in value terms) we can let go
@@ -521,6 +531,8 @@ impl<'a, 'b> Processor<'a, 'b> {
                     .checked_div(unpacked_reserve.liquidity.market_price()?)?
                     .to_lamports_floor(unpacked_reserve.liquidity.mint_decimals)?;
 
+                msg!("full unlock. position's max_withdraw_value {}  max_unlockable_collateral {}  deposited_amount {}", max_withdraw_value, max_unlockable_collateral, collateral.deposited_amount);
+
                 max_unlockable_collateral.min(collateral.deposited_amount)
             } else {
                 let withdraw_amount = amount.min(collateral.deposited_amount);
@@ -537,6 +549,7 @@ impl<'a, 'b> Processor<'a, 'b> {
                     );
                     return Err(SuperLendyError::OperationCanNotBePerformed);
                 }
+                msg!("exact unlock. withdraw_amount {}  withdraw_pct {}  withdraw_value {}  max_withdraw_value {}", withdraw_amount, withdraw_pct, withdraw_value, max_withdraw_value);
                 withdraw_amount
             };
 
@@ -731,7 +744,7 @@ impl<'a, 'b> Processor<'a, 'b> {
         let borrow_value = if amount == MAX_AMOUNT {
             let max_borrow_value = unpacked_reserve.max_borrow_value()?;
             msg!(
-                "max_borrow_value = {}    remaining_borrow_value = {} ",
+                "reserve's max_borrow_value {}   user's remaining_borrow_value {} ",
                 max_borrow_value,
                 remaining_borrow_value
             );
@@ -772,6 +785,9 @@ impl<'a, 'b> Processor<'a, 'b> {
                 "borrow(): checked_add {} + {} + {}",
                 receive_amount, curator_borrow_fee, texture_borrow_fee
             ))))?;
+
+        msg!("borrow_amount {}  receive_amount {}  curator_borrow_fee {}  texture_borrow_fee {}  borrowed_lamports {}",
+            borrow_amount, receive_amount, curator_borrow_fee, texture_borrow_fee, borrowed_lamports);
 
         unpacked_reserve
             .liquidity
@@ -833,6 +849,11 @@ impl<'a, 'b> Processor<'a, 'b> {
             msg!("texture's borrow fee {}", texture_borrow_fee);
         }
 
+        if receive_amount == 0 {
+            msg!("borrow results in 0 transfer to the user");
+            return Err(SuperLendyError::OperationCanNotBePerformed);
+        }
+
         spl_token
             .transfer(
                 reserve_liquidity_supply,
@@ -843,8 +864,6 @@ impl<'a, 'b> Processor<'a, 'b> {
                 Some(unpacked_reserve.liquidity.mint_decimals),
             )?
             .signed(&[&[pda::AUTHORITY_SEED, &[authority_bump]]])?;
-
-        msg!("borrowed {}", receive_amount);
 
         Ok(())
     }
@@ -937,6 +956,12 @@ impl<'a, 'b> Processor<'a, 'b> {
             msg!("Repay amount is too small to transfer liquidity");
             return Err(SuperLendyError::OperationCanNotBePerformed);
         }
+
+        msg!(
+            "settle_amount {}  repay_amount {}",
+            settle_amount,
+            repay_amount
+        );
 
         unpacked_reserve
             .liquidity
@@ -1126,6 +1151,13 @@ impl<'a, 'b> Processor<'a, 'b> {
             collateral,
             unpacked_principal_reserve.liquidity.mint_decimals,
         )?;
+
+        msg!(
+            "settle_amount {}  repay_amount {}  withdraw_amount {}",
+            settle_amount,
+            repay_amount,
+            withdraw_amount
+        );
 
         if repay_amount == 0 {
             msg!("Liquidation is too small to transfer liquidity");

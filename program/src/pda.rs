@@ -46,3 +46,10 @@ pub fn find_reward_supply(pool: &Pubkey, reward_mint: &Pubkey) -> (Pubkey, u8) {
 pub fn find_rewards_program_authority(pool: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[pool.as_ref(), AUTHORITY_SEED], &SUPER_LENDY_ID)
 }
+
+pub fn find_metadata(mint: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[b"metadata", mpl_token_metadata::ID.as_ref(), mint.as_ref()],
+        &mpl_token_metadata::ID,
+    )
+}

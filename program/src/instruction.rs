@@ -1384,8 +1384,8 @@ pub enum SuperLendyInstruction {
     TransferTextureConfigOwnership,
 
     // 32
-    /// Always fails but prints contact version in to returned logs
-    ///
+    /// When called with `no_error` = false the IX fails but prints contact version in to returned logs
+    /// When called with `no_error` = true just do nothing and can be used to increase compute budget for TX.
     #[doc = ix_docs::version!()]
     #[accounts(
         program(
@@ -1394,4 +1394,71 @@ pub enum SuperLendyInstruction {
         ),
     )]
     Version { no_error: bool },
+
+    // 33
+    /// Set metadata for LP token of particular Reserve.
+    /// When metadata doesn't exist - creates it.
+    /// When metadata already exists - updates one.
+    #[doc = ix_docs::set_lp_metadata!()]
+    #[accounts(
+        account(
+            docs = ["Reserve to set LP metadata for"],
+            name = "reserve",
+            checks(owner = "self"),
+        ),
+        account(
+            docs = ["LP tokens mint. PDA."],
+            name = "lp_mint",
+            flags(writable),
+            pda_seeds = [reserve, crate::pda::LP_TOKEN_SEED],
+        ),
+        account(
+            docs = ["Pool - parent for Reserve"],
+            name = "pool",
+            checks(owner = "self"),
+        ),
+        account(
+            docs = ["Metadata account. PDA."],
+            name = "metadata_account",
+            flags(writable),
+        ),
+        account(
+            docs = [
+            "Authority who can configure reserves."
+            ],
+            name = "curator_pools_authority",
+            flags(writable, signer),
+        ),
+        account(
+            docs = ["Curator account."],
+            name = "curator",
+            checks(owner = "self", exempt),
+        ),
+        account(
+            docs = ["Contract's authority. PDA."],
+            name = "program_authority",
+            pda_seeds = [crate::pda::AUTHORITY_SEED],
+        ),
+        program(
+            docs = ["Metaplex token metadata Program."],
+            name = "mpl_token_metadata_program",
+            id = mpl_token_metadata::ID,
+        ),
+        program(
+            docs = ["System Program."],
+            id = "system",
+        ),
+        account(
+            docs = ["Sysvar rent account"],
+            name = "sysvar_rent",
+        ),
+    )]
+    SetLpMetadata { metadata: LpTokenMetadata },
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, Eq, PartialEq)]
+pub struct LpTokenMetadata {
+    pub name: String,
+    pub symbol: String,
+    pub uri: String,
 }
